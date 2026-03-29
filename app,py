@@ -1,0 +1,49 @@
+import streamlit as st
+import pandas as pd
+import sqlite3
+import time
+
+st.set_page_config(page_title="Real-Time Dashboard", layout="wide")
+st.title("📈 Real-Time Stock Dashboard")
+
+# Create a placeholder. This is crucial for real-time Streamlit apps.
+# It allows us to overwrite the screen instead of printing new charts endlessly below.
+dashboard_placeholder = st.empty()
+
+# The Infinite UI Loop
+while True:
+    # 1. Connect to the bridge (the database)
+    conn = sqlite3.connect('live_data.db')
+    
+    # 2. Read the latest 50 data points
+    # We use a try-except block just in case the table hasn't been created yet
+    try:
+        df = pd.read_sql_query("SELECT * FROM stock_prices ORDER BY timestamp DESC LIMIT 50", conn)
+        
+        # Sort by oldest to newest for the chart to flow left to right
+        df = df.sort_values('timestamp') 
+        
+        if not df.empty:
+            latest_price = df['price'].iloc[-1]
+            previous_price = df['price'].iloc[-2] if len(df) > 1 else latest_price
+            price_change = latest_price - previous_price
+            
+            # 3. Update the UI inside the placeholder
+            with dashboard_placeholder.container():
+                st.metric(
+                    label="Reliance Live Price", 
+                    value=f"₹{latest_price:.2f}", 
+                    delta=f"{price_change:.2f}"
+                )
+                
+                # Plot the live line chart
+                st.line_chart(df.set_index('timestamp')['price'])
+                
+    except Exception as e:
+        with dashboard_placeholder.container():
+            st.warning("Waiting for data stream to start... Run fetcher.py")
+    
+    conn.close()
+    
+    # Wait 2 seconds before refreshing the screen
+    time.sleep(2)
