@@ -19,7 +19,7 @@ warnings.filterwarnings('ignore')
 # ==========================================
 stock_ticker = 'BTC-USD'
 file_name = 'BTC_1H_Historical.csv'
-macro_file = 'MACRO_1H_Historical.csv'
+#macro_file = 'MACRO_1H_Historical.csv'
 end_date = datetime.now()
 
 print(f"--- INITIALIZING DATA ENGINE ---")
@@ -227,8 +227,8 @@ else:
 # 7. TELEGRAM INTEGRATION & IST TIMEZONE
 # ==========================================
 # --- YOUR TELEGRAM CREDENTIALS ---
-TELEGRAM_BOT_TOKEN = '8414143952:AAFeC9ZgJoLfU1bQQ31assf98o0pOg5_-cs'
-TELEGRAM_CHAT_ID = '1788185325'
+TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
+TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID')
 
 # Get Current IST Time
 ist = pytz.timezone('Asia/Kolkata')
