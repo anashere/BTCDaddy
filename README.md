@@ -1,1 +1,1 @@
-# stockprediction
+# Bitcoin prediction
