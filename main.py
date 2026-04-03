@@ -15,52 +15,44 @@ import warnings
 warnings.filterwarnings('ignore')
 
 # ==========================================
-# 1. SMART UPDATER (BINANCE NATIVE + MACRO)
+# 1. SMART UPDATER (RAM-ONLY MEMORY STITCHING)
 # ==========================================
-import ccxt # We use CCXT to pull directly from Binance
+import ccxt
+import pandas as pd
+import yfinance as yf
+from datetime import datetime, timedelta
 
 file_name = 'BTC_1H_Historical.csv'
 end_date = datetime.now()
 
 print(f"--- INITIALIZING DATA ENGINE ---")
 
-# Initialize Public Binance API
-binance = ccxt.binance({'enableRateLimit': True})
-
-# Load your existing BTC Data
+# 1. Load your safe, read-only historical anchor
 df_btc = pd.read_csv(file_name, index_col=0)
 df_btc.index = pd.to_datetime(df_btc.index, utc=True).tz_localize(None)
 
-last_recorded_time = df_btc.index[-1]
+# 2. Fetch the live market reality directly from the exchange
+print(f"🔄 Fetching live data directly from Binance...")
+binance = ccxt.binance({'enableRateLimit': True})
 
-# Check if we need to fetch new hourly candles
-if last_recorded_time < (end_date - timedelta(hours=2)):
-    print(f"🔄 Fetching missing hours directly from Binance...")
-    try:
-        # Convert our last timestamp to milliseconds for Binance
-        since_ms = int(last_recorded_time.timestamp() * 1000)
+try:
+    # Grab the last 200 hours to ensure we bridge the gap
+    ohlcv = binance.fetch_ohlcv('BTC/USDT', '1h', limit=200)
+    
+    if ohlcv:
+        new_data = pd.DataFrame(ohlcv, columns=['Datetime', 'Open', 'High', 'Low', 'Close', 'Volume'])
+        new_data['Datetime'] = pd.to_datetime(new_data['Datetime'], unit='ms')
+        new_data.set_index('Datetime', inplace=True)
         
-        # Fetch the exact BTC/USDT 1-hour candles
-        ohlcv = binance.fetch_ohlcv('BTC/USDT', '1h', since=since_ms)
-        
-        if ohlcv:
-            new_data = pd.DataFrame(ohlcv, columns=['Datetime', 'Open', 'High', 'Low', 'Close', 'Volume'])
-            new_data['Datetime'] = pd.to_datetime(new_data['Datetime'], unit='ms')
-            new_data.set_index('Datetime', inplace=True)
-            
-            df_btc = pd.concat([df_btc, new_data])
-            df_btc = df_btc[~df_btc.index.duplicated(keep='last')]
-            df_btc.sort_index(inplace=True)
-            print(f"✅ Successfully added native Binance data!")
-    except Exception as e:
-        print(f"⚠️ Error fetching Binance data: {e}")
-else:
-    print("⚡ Binance Data is completely up to date!")
+        # 3. Stitch them together IN MEMORY (RAM). No files are overwritten!
+        df_btc = pd.concat([df_btc, new_data])
+        df_btc = df_btc[~df_btc.index.duplicated(keep='last')]
+        df_btc.sort_index(inplace=True)
+        print(f"✅ Successfully stitched live Binance data in memory!")
+except Exception as e:
+    print(f"⚠️ Error fetching Binance data: {e}")
 
-# Save the updated data back to the CSV
-df_btc.to_csv(file_name)
-
-# --- FETCH GLOBAL MACRO DATA (S&P 500 & US DOLLAR) ---
+# 4. Fetch the Global Macro Data (Yahoo is safe for Stocks/Dollar)
 print("🌍 Fetching Global Macro Context (SPY & DXY from Yahoo)...")
 macro_start = end_date - timedelta(days=729)
 spy_data = yf.download('SPY', start=macro_start, end=end_date, interval='1h', progress=False)
