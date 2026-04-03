@@ -6,6 +6,7 @@ import yfinance as yf
 import pandas_ta as ta 
 import requests
 import pytz
+import ccxt
 from datetime import datetime, timedelta
 from sklearn.preprocessing import StandardScaler
 from xgboost import XGBClassifier
@@ -15,12 +16,8 @@ import warnings
 warnings.filterwarnings('ignore')
 
 # ==========================================
-# 1. SMART UPDATER (RAM-ONLY MEMORY STITCHING)
+# 1. SMART UPDATER
 # ==========================================
-import ccxt
-import pandas as pd
-import yfinance as yf
-from datetime import datetime, timedelta
 
 file_name = 'BTC_1H_Historical.csv'
 end_date = datetime.now()
@@ -36,23 +33,27 @@ print(f"🔄 Fetching live data directly from Binance...")
 binance = ccxt.binance({'enableRateLimit': True})
 
 try:
-    # Grab the last 200 hours to ensure we bridge the gap
+    # Grab the last 200 hours of live data
     ohlcv = binance.fetch_ohlcv('BTC/USDT', '1h', limit=200)
     
     if ohlcv:
         new_data = pd.DataFrame(ohlcv, columns=['Datetime', 'Open', 'High', 'Low', 'Close', 'Volume'])
         new_data['Datetime'] = pd.to_datetime(new_data['Datetime'], unit='ms')
         new_data.set_index('Datetime', inplace=True)
+       
+        # Find exactly where the Binance data begins...
+        earliest_binance_time = new_data.index[0]
+        # ...and mercilessly delete any CSV rows that overlap it or claim to be in the "future"
+        df_btc = df_btc[df_btc.index < earliest_binance_time]
         
-        # 3. Stitch them together IN MEMORY (RAM). No files are overwritten!
+        # 3. Stitch them together IN MEMORY. Binance is now guaranteed to be at the absolute end.
         df_btc = pd.concat([df_btc, new_data])
-        df_btc = df_btc[~df_btc.index.duplicated(keep='last')]
         df_btc.sort_index(inplace=True)
         print(f"✅ Successfully stitched live Binance data in memory!")
 except Exception as e:
     print(f"⚠️ Error fetching Binance data: {e}")
 
-# 4. Fetch the Global Macro Data (Yahoo is safe for Stocks/Dollar)
+# 4. Fetch the Global Macro Data
 print("🌍 Fetching Global Macro Context (SPY & DXY from Yahoo)...")
 macro_start = end_date - timedelta(days=729)
 spy_data = yf.download('SPY', start=macro_start, end=end_date, interval='1h', progress=False)
@@ -74,7 +75,6 @@ df_btc['SPY_Return'] = df_btc['SPY_Return'].ffill().fillna(0)
 df_btc['DXY_Return'] = df_btc['DXY_Return'].ffill().fillna(0)
 
 data = df_btc.copy()
-
 # ==========================================
 # 2. FEATURE ENGINEERING
 # ==========================================
