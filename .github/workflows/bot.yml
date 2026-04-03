@@ -18,7 +18,7 @@ jobs:
           python-version: '3.12'
 
       - name: Install Libraries
-        run: pip install pandas numpy yfinance pandas-ta xgboost requests pytz scikit-learn
+        run: pip install pandas numpy yfinance pandas-ta xgboost requests pytz scikit-learn ccxt
 
       - name: Run Algorithm
         env:
