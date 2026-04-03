@@ -15,18 +15,53 @@ import warnings
 warnings.filterwarnings('ignore')
 
 # ==========================================
-# 1. SMART UPDATER (NOW WITH MACRO DATA)
+# 1. SMART UPDATER (BINANCE NATIVE + MACRO)
 # ==========================================
-stock_ticker = 'BTC-USD'
+import ccxt # We use CCXT to pull directly from Binance
+
 file_name = 'BTC_1H_Historical.csv'
 end_date = datetime.now()
 
 print(f"--- INITIALIZING DATA ENGINE ---")
 
+# Initialize Public Binance API
+binance = ccxt.binance({'enableRateLimit': True})
+
+# Load your existing BTC Data
 df_btc = pd.read_csv(file_name, index_col=0)
 df_btc.index = pd.to_datetime(df_btc.index, utc=True).tz_localize(None)
 
-print("🌍 Fetching Global Macro Context (SPY & DXY)...")
+last_recorded_time = df_btc.index[-1]
+
+# Check if we need to fetch new hourly candles
+if last_recorded_time < (end_date - timedelta(hours=2)):
+    print(f"🔄 Fetching missing hours directly from Binance...")
+    try:
+        # Convert our last timestamp to milliseconds for Binance
+        since_ms = int(last_recorded_time.timestamp() * 1000)
+        
+        # Fetch the exact BTC/USDT 1-hour candles
+        ohlcv = binance.fetch_ohlcv('BTC/USDT', '1h', since=since_ms)
+        
+        if ohlcv:
+            new_data = pd.DataFrame(ohlcv, columns=['Datetime', 'Open', 'High', 'Low', 'Close', 'Volume'])
+            new_data['Datetime'] = pd.to_datetime(new_data['Datetime'], unit='ms')
+            new_data.set_index('Datetime', inplace=True)
+            
+            df_btc = pd.concat([df_btc, new_data])
+            df_btc = df_btc[~df_btc.index.duplicated(keep='last')]
+            df_btc.sort_index(inplace=True)
+            print(f"✅ Successfully added native Binance data!")
+    except Exception as e:
+        print(f"⚠️ Error fetching Binance data: {e}")
+else:
+    print("⚡ Binance Data is completely up to date!")
+
+# Save the updated data back to the CSV
+df_btc.to_csv(file_name)
+
+# --- FETCH GLOBAL MACRO DATA (S&P 500 & US DOLLAR) ---
+print("🌍 Fetching Global Macro Context (SPY & DXY from Yahoo)...")
 macro_start = end_date - timedelta(days=729)
 spy_data = yf.download('SPY', start=macro_start, end=end_date, interval='1h', progress=False)
 dxy_data = yf.download('DX-Y.NYB', start=macro_start, end=end_date, interval='1h', progress=False)
