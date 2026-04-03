@@ -15,10 +15,10 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.10'
+          python-version: '3.12'
 
       - name: Install Libraries
-        run: pip install pandas numpy yfinance pandas_ta xgboost requests pytz scikit-learn
+        run: pip install pandas numpy yfinance pandas-ta xgboost requests pytz scikit-learn
 
       - name: Run Algorithm
         env:
