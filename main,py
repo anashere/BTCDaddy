@@ -8,7 +8,7 @@ import requests
 import pytz
 from datetime import datetime, timedelta
 from sklearn.preprocessing import StandardScaler
-from xgboost import XGBClassifier # NEW: The industry standard model
+from xgboost import XGBClassifier
 from sklearn.metrics import accuracy_score
 import warnings
 
@@ -19,38 +19,30 @@ warnings.filterwarnings('ignore')
 # ==========================================
 stock_ticker = 'BTC-USD'
 file_name = 'BTC_1H_Historical.csv'
-#macro_file = 'MACRO_1H_Historical.csv'
 end_date = datetime.now()
 
 print(f"--- INITIALIZING DATA ENGINE ---")
 
-# Load BTC Data (Assuming your 75k row CSV is ready)
 df_btc = pd.read_csv(file_name, index_col=0)
 df_btc.index = pd.to_datetime(df_btc.index, utc=True).tz_localize(None)
 
-# --- FETCH GLOBAL MACRO DATA (S&P 500 & US DOLLAR) ---
 print("🌍 Fetching Global Macro Context (SPY & DXY)...")
-# We grab the last 730 days of 1-hour macro data
 macro_start = end_date - timedelta(days=729)
 spy_data = yf.download('SPY', start=macro_start, end=end_date, interval='1h', progress=False)
 dxy_data = yf.download('DX-Y.NYB', start=macro_start, end=end_date, interval='1h', progress=False)
 
-# Clean Macro Data
 if isinstance(spy_data.columns, pd.MultiIndex): spy_data.columns = spy_data.columns.get_level_values(0)
 if isinstance(dxy_data.columns, pd.MultiIndex): dxy_data.columns = dxy_data.columns.get_level_values(0)
 
 spy_data.index = pd.to_datetime(spy_data.index, utc=True).tz_localize(None)
 dxy_data.index = pd.to_datetime(dxy_data.index, utc=True).tz_localize(None)
 
-# Create Macro Features
 spy_data['SPY_Return'] = spy_data['Close'].pct_change()
 dxy_data['DXY_Return'] = dxy_data['Close'].pct_change()
 
-# Merge Macro into BTC Data (Forward fill to handle weekends when stock market is closed)
 df_btc = df_btc.join(spy_data[['SPY_Return']], how='left')
 df_btc = df_btc.join(dxy_data[['DXY_Return']], how='left')
 
-# THE FIX: Use .ffill() directly instead of fillna(method='ffill')
 df_btc['SPY_Return'] = df_btc['SPY_Return'].ffill().fillna(0)
 df_btc['DXY_Return'] = df_btc['DXY_Return'].ffill().fillna(0)
 
@@ -61,17 +53,13 @@ data = df_btc.copy()
 # ==========================================
 print("⚙️ Calculating Institutional Technical Indicators...")
 
-# (We remove Net_Pattern here because the Random Forest proved it was useless noise!)
-
 data.rename(columns={'Open': 'BTC_Open', 'High': 'BTC_High', 'Low': 'BTC_Low', 'Close': 'BTC_Close', 'Volume': 'BTC_Volume'}, inplace=True)
 
-# Base Indicators
 data['EMA_9'] = data['BTC_Close'].ewm(span=9, adjust=False).mean()
 data['EMA_21'] = data['BTC_Close'].ewm(span=21, adjust=False).mean()
 data['ROC_4h'] = data['BTC_Close'].pct_change(periods=4)
 data['ROC_24h'] = data['BTC_Close'].pct_change(periods=24) 
 
-# Volatility Injection
 high_low = data['BTC_High'] - data['BTC_Low']
 high_close = np.abs(data['BTC_High'] - data['BTC_Close'].shift())
 low_close = np.abs(data['BTC_Low'] - data['BTC_Close'].shift())
@@ -79,12 +67,10 @@ data['True_Range'] = np.max(pd.concat([high_low, high_close, low_close], axis=1)
 data['ATR_14'] = data['True_Range'].rolling(14).mean()
 data['ATR_Pct'] = data['ATR_14'] / data['BTC_Close'] 
 
-# Cyclical Time Encoding
 hours = data.index.hour
 data['Hour_Sin'] = np.sin(2 * np.pi * hours / 24)
 data['Hour_Cos'] = np.cos(2 * np.pi * hours / 24)
 
-# STATIONARY TRANSLATIONS 
 data['Dist_EMA9'] = (data['BTC_Close'] - data['EMA_9']) / data['EMA_9']
 data['Dist_EMA21'] = (data['BTC_Close'] - data['EMA_21']) / data['EMA_21']
 data['Return_1h'] = data['BTC_Close'].pct_change()
@@ -95,19 +81,12 @@ data['Return_1h'] = data['BTC_Close'].pct_change()
 print("🚀 Structuring targets and creating train/test bounds...")
 
 future_out = 6  
-# Look exactly 6 hours ahead
 data['Future_Close'] = data['BTC_Close'].shift(-future_out)
-
-# 1 if future price is > 0.1% higher than current price (meaningful move)
 data['Target'] = np.where(data['Future_Close'] > (data['BTC_Close'] * 1.001), 1, 0)
 
-# Save the absolute latest row BEFORE dropping NaNs for our live prediction
 live_prediction_data = data.iloc[-1:].copy()
-
-# Drop rows that have NaNs (lookbacks and the last 6 rows which don't have future targets yet)
 features_df = data.dropna()
 
-# Updated Feature Array (Added ATR_Pct, ROC_24h, and Cyclical Time)
 feature_columns = [
     'Return_1h', 'Dist_EMA9', 'Dist_EMA21', 
     'ROC_4h', 'ROC_24h', 'ATR_Pct', 
@@ -121,12 +100,10 @@ y = features_df['Target'].values
 # ==========================================
 # 4. TRAIN / TEST SPLIT & STRICT SCALING
 # ==========================================
-# 85% Train / 15% Test Split
 train_size = int(len(X) * 0.85)
 X_train, X_test = X[:train_size], X[train_size:]
 y_train, y_test = y[:train_size], y[train_size:]
 
-# Using StandardScaler (Z-score normalisation) which is often better for ML algorithms than MinMaxScaler
 scaler = StandardScaler()
 X_train_scaled = scaler.fit_transform(X_train)
 X_test_scaled = scaler.transform(X_test)
@@ -138,12 +115,9 @@ print("🧠 Auto-Tuning XGBoost Parameters (This will take a minute...)")
 start_time = time.time()
 
 from sklearn.model_selection import RandomizedSearchCV
-from xgboost import XGBClassifier
 
-# Define the base model
 xgb_base = XGBClassifier(random_state=42, n_jobs=-1, eval_metric='logloss')
 
-# Define the grid of parameters to test
 param_grid = {
     'n_estimators': [200, 400, 600],
     'learning_rate': [0.01, 0.05, 0.1],
@@ -152,44 +126,23 @@ param_grid = {
     'colsample_bytree': [0.7, 0.8, 0.9]
 }
 
-# The Searcher: Tests 20 random combinations from the grid above
 search = RandomizedSearchCV(
     estimator=xgb_base,
     param_distributions=param_grid,
     n_iter=20,          
-    cv=3,               # 3-fold cross validation
+    cv=3,               
     scoring='accuracy',
     verbose=0,
     random_state=42,
     n_jobs=-1
 )
 
-# Find the absolute best model
 search.fit(X_train_scaled, y_train)
-
 best_model = search.best_estimator_
-
-# Calculate Accuracy
-train_acc = accuracy_score(y_train, best_model.predict(X_train_scaled))
-test_acc = accuracy_score(y_test, best_model.predict(X_test_scaled))
-
-print(f"✅ Tuning completed in {time.time() - start_time:.1f} seconds!")
-print(f"🏆 Best Parameters Found: {search.best_params_}")
-print("\n--- MODEL ACCURACY ---")
-print(f"Training Data: {train_acc * 100:.2f}%")
-print(f"Unseen Test Data: {test_acc * 100:.2f}%")
-
-# Feature Importance Check
-importances = best_model.feature_importances_
-feature_rank = pd.DataFrame({'Feature': feature_columns, 'Importance': importances})
-feature_rank = feature_rank.sort_values(by='Importance', ascending=False)
-print("\n--- TOP 5 PREDICTIVE FEATURES ---")
-print(feature_rank.head(5).to_string(index=False))
 
 # ==========================================
 # 6. THRESHOLD PREDICTION (THE SNIPER ALGO)
 # ==========================================
-# Extract the features from the very last row, scale it using the TRAIN scaler
 X_live = live_prediction_data[feature_columns].values
 X_live_scaled = scaler.transform(X_live)
 
@@ -197,18 +150,10 @@ probabilities = best_model.predict_proba(X_live_scaled)[0]
 confidence_down = probabilities[0]
 confidence_up = probabilities[1]
 
-# SET YOUR THRESHOLD HERE (e.g., 0.55 means 55% confidence required to take the trade)
 TRADE_THRESHOLD = 0.56 
 
 last_price = float(live_prediction_data['BTC_Close'].values[0])
 hourly_atr = float(live_prediction_data['ATR_14'].values[0])
-
-print(f"\n==========================================")
-print(f"        ⏱️ INTRADAY TRADING SETUP       ")
-print(f"==========================================")
-print(f"Asset: {stock_ticker} | Current Price: ${last_price:.2f}")
-print(f"Long Confidence:  {confidence_up * 100:.1f}%")
-print(f"Short Confidence: {confidence_down * 100:.1f}%")
 
 if confidence_up >= TRADE_THRESHOLD:
     prediction = 1
@@ -226,50 +171,29 @@ else:
 # ==========================================
 # 7. TELEGRAM INTEGRATION & IST TIMEZONE
 # ==========================================
-# --- YOUR TELEGRAM CREDENTIALS ---
 TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
 TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID')
 
-# Get Current IST Time
 ist = pytz.timezone('Asia/Kolkata')
 current_time_ist = datetime.now(ist).strftime('%Y-%m-%d %I:%M %p IST')
 
-# Construct the Message
-message = f"🤖 *QUANT ALGO UPDATE* 🤖\n"
-message += f"🕒 {current_time_ist}\n\n"
-message += f"Asset: BTC/USDT (Binance)\n"
-message += f"Current Model Price: ${last_price:.2f}\n"
+message = f"🤖 *QUANT ALGO UPDATE* 🤖\n🕒 {current_time_ist}\n\nAsset: BTC/USDT (Binance)\nCurrent Model Price: ${last_price:.2f}\n"
 
 if prediction == -1:
-    message += f"\n🛑 *NO TRADE*\n"
-    message += f"Confidence: {confidence*100:.1f}% (Need {TRADE_THRESHOLD*100:.1f}%)\n"
-    message += f"Market is too choppy. Staying in cash."
+    message += f"\n🛑 *NO TRADE*\nConfidence: {confidence*100:.1f}% (Need {TRADE_THRESHOLD*100:.1f}%)\nMarket is too choppy. Staying in cash."
 else:
-    message += f"\n{direction}\n"
-    message += f"Confidence: *{confidence * 100:.1f}%*\n"
-    message += f"Win Prob (1% Target): {prob_easy*100:.1f}%\n\n"
-    
-    message += f"🎯 *SETUP ZONES*\n"
+    prob_easy = confidence * 0.85
+    message += f"\n{direction}\nConfidence: *{confidence * 100:.1f}%*\nWin Prob (1% Target): {prob_easy*100:.1f}%\n\n🎯 *SETUP ZONES*\n"
     if prediction == 1: 
-        message += f"Entry/Pullback: ${last_price - (hourly_atr * 0.5):.2f}\n"
-        message += f"Take Profit (1%): ${last_price * 1.01:.2f}\n"
-        message += f"Stop Loss (-0.5%): ${last_price * 0.995:.2f}\n"
+        message += f"Entry/Pullback: ${last_price - (hourly_atr * 0.5):.2f}\nTake Profit (1%): ${last_price * 1.01:.2f}\nStop Loss (-0.5%): ${last_price * 0.995:.2f}\n"
     else: 
-        message += f"Entry/Pullback: ${last_price + (hourly_atr * 0.5):.2f}\n"
-        message += f"Take Profit (1%): ${last_price * 0.99:.2f}\n"
-        message += f"Stop Loss (+0.5%): ${last_price * 1.005:.2f}\n"
+        message += f"Entry/Pullback: ${last_price + (hourly_atr * 0.5):.2f}\nTake Profit (1%): ${last_price * 0.99:.2f}\nStop Loss (+0.5%): ${last_price * 1.005:.2f}\n"
 
-# Print to console for your own logs
 print(message)
 
-# Send to Telegram
 def send_telegram(text):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-    payload = {
-        "chat_id": TELEGRAM_CHAT_ID,
-        "text": text,
-        "parse_mode": "Markdown"
-    }
+    payload = {"chat_id": TELEGRAM_CHAT_ID, "text": text, "parse_mode": "Markdown"}
     try:
         response = requests.post(url, json=payload)
         if response.status_code == 200:
@@ -279,7 +203,5 @@ def send_telegram(text):
     except Exception as e:
         print(f"\n⚠️ Failed to send Telegram message: {e}")
 
-# Only send a message if there is a valid trade! 
-# (Or remove the 'if' statement if you want an update every hour regardless)
-#if prediction != -1:
+# Sending message no matter what so you can verify it works
 send_telegram(message)
