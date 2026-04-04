@@ -11,6 +11,7 @@ from datetime import datetime, timedelta
 from sklearn.preprocessing import StandardScaler
 from xgboost import XGBClassifier
 from sklearn.metrics import accuracy_score
+import matplotlib.pyplot as plt
 import warnings
 
 warnings.filterwarnings('ignore')
@@ -216,39 +217,96 @@ else:
     direction = "🛑 NO TRADE (CONFIDENCE TOO LOW)"
 
 # ==========================================
-# 7. TELEGRAM INTEGRATION & IST TIMEZONE
+# 7. LOGGING, CHARTING & TELEGRAM ALERTS
 # ==========================================
+
+# --- YOUR CREDENTIALS ---
 TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
 TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID')
 
 ist = pytz.timezone('Asia/Kolkata')
-current_time_ist = datetime.now(ist).strftime('%Y-%m-%d %I:%M %p IST')
+current_time_ist = datetime.now(ist)
+time_str = current_time_ist.strftime('%Y-%m-%d %I:%M %p')
 
-message = f"🤖 *BTC UPDATE* 🤖\n🕒 {current_time_ist}\n\nAsset: BTC/USDT (Binance)\nCurrent Model Price: ${last_price:.2f}\n"
+# ------------------------------------------
+# A. UPDATE THE PERMANENT TRADE CSV LOG
+# ------------------------------------------
+log_file = 'trade_log.csv'
+log_entry = pd.DataFrame([{
+    'Datetime': time_str,
+    'Price': last_price,
+    'Prediction': "LONG" if prediction == 1 else "SHORT" if prediction == 0 else "NONE",
+    'Confidence': round(confidence * 100, 1)
+}])
+
+# If the file exists, add to it. If not, create it!
+if os.path.exists(log_file):
+    log_df = pd.read_csv(log_file)
+    log_df = pd.concat([log_df, log_entry], ignore_index=True)
+else:
+    log_df = log_entry.copy()
+
+# Keep only the last 100 hours in the log so the chart doesn't get too crowded
+if len(log_df) > 100:
+    log_df = log_df.tail(100)
+
+log_df.to_csv(log_file, index=False)
+print("📝 Trade logged to CSV successfully.")
+
+# ------------------------------------------
+# B. DRAW THE PERFORMANCE CHART
+# ------------------------------------------
+try:
+    plt.style.use('dark_background')
+    fig, ax = plt.subplots(figsize=(10, 5))
+    
+    # Plot the price line from our log
+    ax.plot(range(len(log_df)), log_df['Price'], color='white', linewidth=1.5, alpha=0.8, label="BTC Price")
+    
+    # Overlay the Longs (Green Up Arrows) and Shorts (Red Down Arrows)
+    for i, row in log_df.iterrows():
+        if row['Prediction'] == 'LONG':
+            ax.scatter(i, row['Price'] - 50, color='lime', marker='^', s=100, zorder=5)
+        elif row['Prediction'] == 'SHORT':
+            ax.scatter(i, row['Price'] + 50, color='red', marker='v', s=100, zorder=5)
+
+    ax.set_title(f"🤖 BTC/USDT Algorithm Tracker (Last {len(log_df)} Hours)", color='gold', fontsize=14)
+    ax.set_ylabel("Price (USDT)")
+    ax.grid(color='gray', linestyle='--', alpha=0.3)
+    ax.legend(loc="upper left")
+    
+    # Save the picture to the temporary server
+    chart_filename = 'chart.png'
+    plt.tight_layout()
+    plt.savefig(chart_filename, dpi=150)
+    plt.close()
+    print("📊 Chart generated successfully.")
+except Exception as e:
+    print(f"⚠️ Chart generation failed: {e}")
+
+# ------------------------------------------
+# C. SEND THE MESSAGE & CHART TO TELEGRAM
+# ------------------------------------------
+message = f"🤖 *BTC UPDATE* 🤖\n"
+message += f"🕒 {time_str}\n\n"
+message += f"Asset: BTC/USDT\n"
+message += f"Price: ${last_price:.2f}\n"
 
 if prediction == -1:
-    message += f"\n🛑 *NO TRADE*\nConfidence: {confidence*100:.1f}% (Need {TRADE_THRESHOLD*100:.1f}%)\nMarket is too choppy. Staying in cash."
+    message += f"\n🛑 *NO TRADE*\n"
+    message += f"Confidence: {confidence*100:.1f}%\nMarket choppy."
 else:
-    prob_easy = confidence * 0.85
-    message += f"\n{direction}\nConfidence: *{confidence * 100:.1f}%*\nWin Prob (1% Target): {prob_easy*100:.1f}%\n\n🎯 *SETUP ZONES*\n"
-    if prediction == 1: 
-        message += f"Entry/Pullback: ${last_price - (hourly_atr * 0.5):.2f}\nTake Profit (1%): ${last_price * 1.01:.2f}\nStop Loss (-0.5%): ${last_price * 0.995:.2f}\n"
-    else: 
-        message += f"Entry/Pullback: ${last_price + (hourly_atr * 0.5):.2f}\nTake Profit (1%): ${last_price * 0.99:.2f}\nStop Loss (+0.5%): ${last_price * 1.005:.2f}\n"
+    message += f"\n{direction}\n"
+    message += f"Confidence: *{confidence * 100:.1f}%*\n"
 
 print(message)
 
-def send_telegram(text):
-    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-    payload = {"chat_id": TELEGRAM_CHAT_ID, "text": text, "parse_mode": "Markdown"}
-    try:
-        response = requests.post(url, json=payload)
-        if response.status_code == 200:
-            print("\n📲 Successfully sent to Telegram!")
-        else:
-            print(f"\n⚠️ Telegram Error: {response.text}")
-    except Exception as e:
-        print(f"\n⚠️ Failed to send Telegram message: {e}")
+# Send Text Message
+url_text = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+requests.post(url_text, json={"chat_id": TELEGRAM_CHAT_ID, "text": message, "parse_mode": "Markdown"})
 
-# Sending message no matter what so you can verify it works
-send_telegram(message)
+# Send The Chart Picture!
+if os.path.exists(chart_filename):
+    url_photo = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendPhoto"
+    with open(chart_filename, 'rb') as photo:
+        requests.post(url_photo, data={"chat_id": TELEGRAM_CHAT_ID}, files={"photo": photo})
