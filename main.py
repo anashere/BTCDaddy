@@ -30,7 +30,7 @@ df_btc.index = pd.to_datetime(df_btc.index, utc=True).tz_localize(None)
 
 # 2. Fetch the live market reality directly from the exchange
 print(f"🔄 Fetching live data directly from Binance...")
-binance = ccxt.binance({'enableRateLimit': True})
+binance = ccxt.binanceus({'enableRateLimit': True})
 
 try:
     # Grab the last 200 hours of live data
@@ -102,6 +102,26 @@ data['Dist_EMA9'] = (data['BTC_Close'] - data['EMA_9']) / data['EMA_9']
 data['Dist_EMA21'] = (data['BTC_Close'] - data['EMA_21']) / data['EMA_21']
 data['Return_1h'] = data['BTC_Close'].pct_change()
 
+#FIBONACCI ALGORITHMIC MEMORY
+# We look back over the last 3 days (72 hours) to find the major swings
+lookback = 72
+data['Rolling_High'] = data['BTC_High'].rolling(window=lookback).max()
+data['Rolling_Low'] = data['BTC_Low'].rolling(window=lookback).min()
+
+# Calculate the total range of the recent move
+move_range = data['Rolling_High'] - data['Rolling_Low']
+
+# Calculate the 61.8% Golden Pocket from both directions
+data['Fib_618_Support'] = data['Rolling_High'] - (move_range * 0.618)
+data['Fib_618_Resistance'] = data['Rolling_Low'] + (move_range * 0.618)
+
+# Calculate the percentage distance from current price to these Golden Pockets
+dist_to_support = np.abs(data['BTC_Close'] - data['Fib_618_Support']) / data['BTC_Close']
+dist_to_resistance = np.abs(data['BTC_Close'] - data['Fib_618_Resistance']) / data['BTC_Close']
+
+# The model just needs to know: "How close am I to a major Fibonacci level?"
+data['Dist_to_Golden_Pocket'] = np.minimum(dist_to_support, dist_to_resistance)
+
 # ==========================================
 # 3. TARGET CREATION & DATA CLEANUP
 # ==========================================
@@ -118,7 +138,7 @@ feature_columns = [
     'Return_1h', 'Dist_EMA9', 'Dist_EMA21', 
     'ROC_4h', 'ROC_24h', 'ATR_Pct', 
     'Hour_Sin', 'Hour_Cos', 
-    'SPY_Return', 'DXY_Return'
+    'SPY_Return', 'DXY_Return','Dist_to_Golden_Pocket'
 ]
 
 X = features_df[feature_columns].values
@@ -204,7 +224,7 @@ TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID')
 ist = pytz.timezone('Asia/Kolkata')
 current_time_ist = datetime.now(ist).strftime('%Y-%m-%d %I:%M %p IST')
 
-message = f"🤖 *QUANT ALGO UPDATE* 🤖\n🕒 {current_time_ist}\n\nAsset: BTC/USDT (Binance)\nCurrent Model Price: ${last_price:.2f}\n"
+message = f"🤖 *BTC UPDATE* 🤖\n🕒 {current_time_ist}\n\nAsset: BTC/USDT (Binance)\nCurrent Model Price: ${last_price:.2f}\n"
 
 if prediction == -1:
     message += f"\n🛑 *NO TRADE*\nConfidence: {confidence*100:.1f}% (Need {TRADE_THRESHOLD*100:.1f}%)\nMarket is too choppy. Staying in cash."
