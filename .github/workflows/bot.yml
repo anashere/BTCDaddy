@@ -2,8 +2,12 @@ name: Hourly Trading Algo
 
 on:
   schedule:
-    - cron: '0 * * * *' # Runs exactly at minute 00 of every hour
-  workflow_dispatch: # Allows you to manually click a button to test it!
+    - cron: '0 * * * *'
+  workflow_dispatch:
+
+# CRITICAL: This gives the bot permission to save the CSV back to GitHub!
+permissions:
+  contents: write 
 
 jobs:
   trade:
@@ -17,11 +21,24 @@ jobs:
         with:
           python-version: '3.12'
 
+      # Notice we added 'matplotlib' to draw the chart!
       - name: Install Libraries
-        run: pip install pandas numpy yfinance pandas-ta xgboost requests pytz scikit-learn ccxt
+        run: pip install pandas numpy yfinance pandas-ta xgboost requests pytz scikit-learn ccxt matplotlib
 
       - name: Run Algorithm
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          BINANCE_API_KEY: ${{ secrets.BINANCE_API_KEY }}
+          BINANCE_SECRET: ${{ secrets.BINANCE_SECRET }}
         run: python main.py
+
+      # This saves the new log file back to your GitHub repository forever
+      - name: Commit and Push Trade Log
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git add trade_log.csv
+          # We use || echo to prevent the server from crashing if there are no new trades to save
+          git commit -m "📝 Auto-updated trade_log.csv" || echo "No changes to commit"
+          git push
