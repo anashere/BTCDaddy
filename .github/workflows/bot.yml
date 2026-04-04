@@ -5,7 +5,6 @@ on:
     - cron: '0 * * * *'
   workflow_dispatch:
 
-# CRITICAL: This gives the bot permission to save the CSV back to GitHub!
 permissions:
   contents: write 
 
@@ -33,12 +32,14 @@ jobs:
           BINANCE_SECRET: ${{ secrets.BINANCE_SECRET }}
         run: python main.py
 
-      # This saves the new log file back to your GitHub repository forever
+     # This saves the new log file back to your GitHub repository forever
       - name: Commit and Push Trade Log
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           git add trade_log.csv
-          # We use || echo to prevent the server from crashing if there are no new trades to save
-          git commit -m "📝 Auto-updated trade_log.csv" || echo "No changes to commit"
+          # We use || echo to prevent the server from crashing if there are no new trades
+          git commit -m "Auto-updated trade_log.csv" || echo "No changes to commit"
+          git pull --rebase
+          
           git push
