@@ -289,15 +289,30 @@ except Exception as e:
 # ------------------------------------------
 message = f"🤖 *BTC UPDATE* 🤖\n"
 message += f"🕒 {time_str}\n\n"
-message += f"Asset: BTC/USDT\n"
-message += f"Price: ${last_price:.2f}\n"
+message += f"Asset: BTC/USDT (Binance)\n"
+message += f"Current Model Price: ${last_price:.2f}\n"
 
 if prediction == -1:
     message += f"\n🛑 *NO TRADE*\n"
-    message += f"Confidence: {confidence*100:.1f}%\nMarket choppy."
+    message += f"Confidence: {confidence*100:.1f}%\n"
+    message += f"Market is too choppy. Staying in cash."
 else:
+    # Re-calculate the win probability estimate
+    prob_easy = confidence * 0.85
+    
     message += f"\n{direction}\n"
     message += f"Confidence: *{confidence * 100:.1f}%*\n"
+    message += f"Win Prob (1% Target): {prob_easy*100:.1f}%\n\n"
+    
+    message += f"🎯 *SETUP ZONES*\n"
+    if prediction == 1: 
+        message += f"Entry/Pullback: ${last_price - (hourly_atr * 0.5):.2f}\n"
+        message += f"Take Profit (1%): ${last_price * 1.01:.2f}\n"
+        message += f"Stop Loss (-0.5%): ${last_price * 0.995:.2f}\n"
+    else: 
+        message += f"Entry/Pullback: ${last_price + (hourly_atr * 0.5):.2f}\n"
+        message += f"Take Profit (1%): ${last_price * 0.99:.2f}\n"
+        message += f"Stop Loss (+0.5%): ${last_price * 1.005:.2f}\n"
 
 print(message)
 
