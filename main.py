@@ -182,8 +182,8 @@ xgb_base = XGBClassifier(
     reg_lambda=2.0,        
     random_state=42, 
     n_jobs=-1, 
-    eval_metric='auc'       #
-
+    eval_metric='auc'       
+)
 xgb_base.fit(X_train_scaled, y_train)
 best_model = xgb_base
 
