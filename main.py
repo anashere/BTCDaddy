@@ -78,7 +78,7 @@ df_btc['DXY_Return'] = df_btc['DXY_Return'].ffill().fillna(0)
 data = df_btc.copy()
 
 # ==========================================
-# 2. FEATURE ENGINEERING
+# 2. FEATURE ENGINEERING & TREND FILTER
 # ==========================================
 print("[INFO] Calculating Institutional Technical Indicators...")
 
@@ -86,6 +86,10 @@ data.rename(columns={'Open': 'BTC_Open', 'High': 'BTC_High', 'Low': 'BTC_Low', '
 
 data['EMA_9'] = data['BTC_Close'].ewm(span=9, adjust=False).mean()
 data['EMA_21'] = data['BTC_Close'].ewm(span=21, adjust=False).mean()
+
+# --- THE NEW TREND FILTER ---
+data['EMA_200'] = data['BTC_Close'].ewm(span=200, adjust=False).mean() 
+
 data['ROC_4h'] = data['BTC_Close'].pct_change(periods=4)
 data['ROC_24h'] = data['BTC_Close'].pct_change(periods=24) 
 
@@ -105,23 +109,16 @@ data['Dist_EMA21'] = (data['BTC_Close'] - data['EMA_21']) / data['EMA_21']
 data['Return_1h'] = data['BTC_Close'].pct_change()
 
 # FIBONACCI ALGORITHMIC MEMORY
-# We look back over the last 3 days (72 hours) to find the major swings
 lookback = 72
 data['Rolling_High'] = data['BTC_High'].rolling(window=lookback).max()
 data['Rolling_Low'] = data['BTC_Low'].rolling(window=lookback).min()
 
-# Calculate the total range of the recent move
 move_range = data['Rolling_High'] - data['Rolling_Low']
-
-# Calculate the 61.8% Golden Pocket from both directions
 data['Fib_618_Support'] = data['Rolling_High'] - (move_range * 0.618)
 data['Fib_618_Resistance'] = data['Rolling_Low'] + (move_range * 0.618)
 
-# Calculate the percentage distance from current price to these Golden Pockets
 dist_to_support = np.abs(data['BTC_Close'] - data['Fib_618_Support']) / data['BTC_Close']
 dist_to_resistance = np.abs(data['BTC_Close'] - data['Fib_618_Resistance']) / data['BTC_Close']
-
-# The model just needs to know: "How close am I to a major Fibonacci level?"
 data['Dist_to_Golden_Pocket'] = np.minimum(dist_to_support, dist_to_resistance)
 
 # ==========================================
@@ -158,39 +155,26 @@ X_train_scaled = scaler.fit_transform(X_train)
 X_test_scaled = scaler.transform(X_test)
 
 # ==========================================
-# 5. AUTO-TUNE XGBOOST (GRID SEARCH)
+# 5. FAST XGBOOST (HARDCODED PARAMETERS)
 # ==========================================
-print("[INFO] Auto-Tuning XGBoost Parameters (This will take a minute...)")
-start_time = time.time()
+print("[INFO] Training XGBoost Model (Lightning Fast Mode)...")
 
-from sklearn.model_selection import RandomizedSearchCV
-
-xgb_base = XGBClassifier(random_state=42, n_jobs=-1, eval_metric='logloss')
-
-param_grid = {
-    'n_estimators': [200, 400, 600],
-    'learning_rate': [0.01, 0.05, 0.1],
-    'max_depth': [4, 5, 7],
-    'subsample': [0.7, 0.8, 0.9],
-    'colsample_bytree': [0.7, 0.8, 0.9]
-}
-
-search = RandomizedSearchCV(
-    estimator=xgb_base,
-    param_distributions=param_grid,
-    n_iter=20,          
-    cv=3,               
-    scoring='accuracy',
-    verbose=0,
-    random_state=42,
-    n_jobs=-1
+xgb_base = XGBClassifier(
+    n_estimators=400,
+    learning_rate=0.05,
+    max_depth=5,
+    subsample=0.8,
+    colsample_bytree=0.8,
+    random_state=42, 
+    n_jobs=-1, 
+    eval_metric='logloss'
 )
 
-search.fit(X_train_scaled, y_train)
-best_model = search.best_estimator_
+xgb_base.fit(X_train_scaled, y_train)
+best_model = xgb_base
 
 # ==========================================
-# 6. THRESHOLD PREDICTION (THE SNIPER ALGO)
+# 6. THRESHOLD PREDICTION (WITH TREND FILTER)
 # ==========================================
 X_live = live_prediction_data[feature_columns].values
 X_live_scaled = scaler.transform(X_live)
@@ -201,17 +185,37 @@ confidence_up = probabilities[1]
 
 TRADE_THRESHOLD = 0.56 
 
+# --- PULL THE LIVE DATA POINTS ---
 last_price = float(live_prediction_data['BTC_Close'].values[0])
+current_high = float(live_prediction_data['BTC_High'].values[0])
+current_low = float(live_prediction_data['BTC_Low'].values[0])
 hourly_atr = float(live_prediction_data['ATR_14'].values[0])
+ema_200 = float(live_prediction_data['EMA_200'].values[0])
+
+# --- APPLY THE LOGIC & FILTERS ---
+status_message = "Market is too choppy. Staying in cash."
 
 if confidence_up >= TRADE_THRESHOLD:
-    prediction = 1
-    confidence = confidence_up
-    direction = "LONG (BUY)"
+    if last_price < ema_200:
+        prediction = -1
+        confidence = confidence_up
+        direction = "NO TRADE (TREND FILTER)"
+        status_message = f"Price (${last_price:.0f}) is below 200 EMA (${ema_200:.0f}). Longs disabled."
+    else:
+        prediction = 1
+        confidence = confidence_up
+        direction = "LONG (BUY)"
+        
 elif confidence_down >= TRADE_THRESHOLD:
-    prediction = 0
-    confidence = confidence_down
-    direction = "SHORT (SELL)"
+    if last_price > ema_200:
+        prediction = -1
+        confidence = confidence_down
+        direction = "NO TRADE (TREND FILTER)"
+        status_message = f"Price (${last_price:.0f}) is above 200 EMA (${ema_200:.0f}). Shorts disabled."
+    else:
+        prediction = 0
+        confidence = confidence_down
+        direction = "SHORT (SELL)"
 else:
     prediction = -1
     confidence = max(confidence_up, confidence_down)
@@ -221,7 +225,6 @@ else:
 # 7. LOGGING, CHARTING & TELEGRAM ALERTS
 # ==========================================
 
-# --- YOUR CREDENTIALS ---
 TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
 TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID')
 
@@ -236,18 +239,18 @@ log_file = 'trade_log.csv'
 log_entry = pd.DataFrame([{
     'Datetime': time_str,
     'Price': last_price,
+    'High': current_high,     # <--- ADDED HIGH
+    'Low': current_low,       # <--- ADDED LOW
     'Prediction': "LONG" if prediction == 1 else "SHORT" if prediction == 0 else "NONE",
     'Confidence': round(confidence * 100, 1)
 }])
 
-# If the file exists, add to it. If not, create it!
 if os.path.exists(log_file):
     log_df = pd.read_csv(log_file)
     log_df = pd.concat([log_df, log_entry], ignore_index=True)
 else:
     log_df = log_entry.copy()
 
-# Keep only the last 100 hours in the log so the chart doesn't get too crowded
 if len(log_df) > 100:
     log_df = log_df.tail(100)
 
@@ -261,10 +264,8 @@ try:
     plt.style.use('dark_background')
     fig, ax = plt.subplots(figsize=(10, 5))
     
-    # Plot the price line from our log
     ax.plot(range(len(log_df)), log_df['Price'], color='white', linewidth=1.5, alpha=0.8, label="BTC Price")
     
-    # Overlay the Longs (Green Up Arrows) and Shorts (Red Down Arrows)
     for i, row in log_df.iterrows():
         if row['Prediction'] == 'LONG':
             ax.scatter(i, row['Price'] - 50, color='lime', marker='^', s=100, zorder=5)
@@ -276,7 +277,6 @@ try:
     ax.grid(color='gray', linestyle='--', alpha=0.3)
     ax.legend(loc="upper left")
     
-    # Save the picture to the temporary server
     chart_filename = 'chart.png'
     plt.tight_layout()
     plt.savefig(chart_filename, dpi=150)
@@ -296,9 +296,8 @@ message += f"Current Model Price: ${last_price:.2f}\n"
 if prediction == -1:
     message += f"\n*NO TRADE*\n"
     message += f"Confidence: {confidence*100:.1f}%\n"
-    message += f"Status: Market is too choppy. Staying in cash."
+    message += f"Status: {status_message}"
 else:
-    # Re-calculate the win probability estimate
     prob_easy = confidence * 0.85
     
     message += f"\n*SIGNAL:* {direction}\n"
