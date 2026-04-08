@@ -108,6 +108,17 @@ data['Dist_EMA9'] = (data['BTC_Close'] - data['EMA_9']) / data['EMA_9']
 data['Dist_EMA21'] = (data['BTC_Close'] - data['EMA_21']) / data['EMA_21']
 data['Return_1h'] = data['BTC_Close'].pct_change()
 
+# 1. Relative Strength Index (Is it overbought or oversold?)
+data['RSI_14'] = ta.rsi(data['BTC_Close'], length=14)
+
+# 2. On-Balance Volume (Is big institutional money flowing in or out?)
+data['OBV'] = ta.obv(data['BTC_Close'], data['BTC_Volume'])
+
+# 3. MACD (Is the immediate trend accelerating or dying?)
+macd = ta.macd(data['BTC_Close'], fast=12, slow=26, signal=9)
+data['MACD'] = macd['MACD_12_26_9']
+data['MACD_Histogram'] = macd['MACDh_12_26_9']
+
 # FIBONACCI ALGORITHMIC MEMORY
 lookback = 72
 data['Rolling_High'] = data['BTC_High'].rolling(window=lookback).max()
@@ -137,7 +148,8 @@ feature_columns = [
     'Return_1h', 'Dist_EMA9', 'Dist_EMA21', 
     'ROC_4h', 'ROC_24h', 'ATR_Pct', 
     'Hour_Sin', 'Hour_Cos', 
-    'SPY_Return', 'DXY_Return', 'Dist_to_Golden_Pocket'
+    'SPY_Return', 'DXY_Return', 'Dist_to_Golden_Pocket',
+    'RSI_14', 'OBV', 'MACD', 'MACD_Histogram'
 ]
 
 X = features_df[feature_columns].values
@@ -155,20 +167,22 @@ X_train_scaled = scaler.fit_transform(X_train)
 X_test_scaled = scaler.transform(X_test)
 
 # ==========================================
-# 5. FAST XGBOOST (HARDCODED PARAMETERS)
+# 5. PRO XGBOOST
 # ==========================================
-print("[INFO] Training XGBoost Model (Lightning Fast Mode)...")
+print("[INFO] Training Upgraded XGBoost Model...")
 
 xgb_base = XGBClassifier(
-    n_estimators=400,
-    learning_rate=0.05,
-    max_depth=5,
-    subsample=0.8,
-    colsample_bytree=0.8,
+    n_estimators=500,
+    learning_rate=0.01,     
+    max_depth=6,            
+    subsample=0.75,
+    colsample_bytree=0.75,
+    gamma=2.0,              
+    reg_alpha=0.5,          
+    reg_lambda=2.0,        
     random_state=42, 
     n_jobs=-1, 
-    eval_metric='logloss'
-)
+    eval_metric='auc'       #
 
 xgb_base.fit(X_train_scaled, y_train)
 best_model = xgb_base
