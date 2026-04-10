@@ -236,25 +236,73 @@ else:
     direction = "NO TRADE (CONFIDENCE TOO LOW)"
 
 # ==========================================
-# 7. LOGGING, CHARTING & TELEGRAM ALERTS
+# 7. EXECUTION, LOGGING, CHARTING & TELEGRAM
 # ==========================================
 
 TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
 TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID')
+BINANCE_API_KEY = os.getenv('BINANCE_API_KEY')
+BINANCE_SECRET = os.getenv('BINANCE_SECRET')
 
 ist = pytz.timezone('Asia/Kolkata')
 current_time_ist = datetime.now(ist)
 time_str = current_time_ist.strftime('%Y-%m-%d %I:%M %p')
 
 # ------------------------------------------
-# A. UPDATE THE PERMANENT TRADE CSV LOG
+# A. BINANCE TESTNET EXECUTION ENGINE
+# ------------------------------------------
+trade_status = "No Execution Attempted."
+TRADE_SIZE_USDT = 100.0  # Spending $100 of fake money per trade
+
+if prediction != -1:
+    print("[INFO] Attempting Execution on Binance Testnet...")
+    try:
+        # Initialize Execution Exchange (Standard CCXT, but Sandbox Mode)
+        exec_exchange = ccxt.binance({
+            'apiKey': BINANCE_API_KEY,
+            'secret': BINANCE_SECRET,
+            'enableRateLimit': True,
+            'options': {'defaultType': 'spot'}
+        })
+        exec_exchange.set_sandbox_mode(True) # CRITICAL: FAKE MONEY MODE
+
+        symbol = 'BTC/USDT'
+        raw_qty = TRADE_SIZE_USDT / last_price
+        qty = exec_exchange.amount_to_precision(symbol, raw_qty)
+        
+        if prediction == 1: # LONG EXECUTION
+            tp_price = float(exec_exchange.price_to_precision(symbol, last_price * 1.01))
+            sl_price = float(exec_exchange.price_to_precision(symbol, last_price * 0.995))
+            
+            # 1. Market Buy Entry
+            entry_order = exec_exchange.create_market_buy_order(symbol, qty)
+            
+            # 2. Place OCO Sell (Take Profit + Stop Loss simultaneously)
+            oco_order = exec_exchange.create_order(
+                symbol, 'limit', 'sell', qty, tp_price, 
+                params={'stopPrice': sl_price}
+            )
+            trade_status = f"✅ LONG Executed at ${last_price:.2f}\nTP: ${tp_price} | SL: ${sl_price}"
+            
+        elif prediction == 0: # SHORT EXECUTION
+            trade_status = f"⚠️ SHORT Signal. Spot Testnet does not allow shorting without margin. Skipped physical execution."
+            
+        print(f"[SUCCESS] {trade_status}")
+            
+    except Exception as e:
+        trade_status = f"❌ EXECUTION FAILED: {e}"
+        print(trade_status)
+
+
+# ------------------------------------------
+# B. UPDATE THE PERMANENT TRADE CSV LOG
 # ------------------------------------------
 log_file = 'trade_log.csv'
 log_entry = pd.DataFrame([{
     'Datetime': time_str,
     'Price': last_price,
-    'High': current_high,     # <--- ADDED HIGH
-    'Low': current_low,       # <--- ADDED LOW
+    'High': current_high,     
+    'Low': current_low,       
     'Prediction': "LONG" if prediction == 1 else "SHORT" if prediction == 0 else "NONE",
     'Confidence': round(confidence * 100, 1)
 }])
@@ -272,7 +320,7 @@ log_df.to_csv(log_file, index=False)
 print("[INFO] Trade logged to CSV successfully.")
 
 # ------------------------------------------
-# B. DRAW THE PERFORMANCE CHART
+# C. DRAW THE PERFORMANCE CHART
 # ------------------------------------------
 try:
     plt.style.use('dark_background')
@@ -300,11 +348,11 @@ except Exception as e:
     print(f"[ERROR] Chart generation failed: {e}")
 
 # ------------------------------------------
-# C. SEND THE MESSAGE & CHART TO TELEGRAM
+# D. SEND THE MESSAGE & CHART TO TELEGRAM
 # ------------------------------------------
 message = f"*BTC ALGO UPDATE*\n"
 message += f"Time: {time_str}\n\n"
-message += f"Asset: BTC/USDT (Binance)\n"
+message += f"Asset: BTC/USDT (Testnet)\n"
 message += f"Current Model Price: ${last_price:.2f}\n"
 
 if prediction == -1:
@@ -322,11 +370,13 @@ else:
     if prediction == 1: 
         message += f"Entry/Pullback: ${last_price - (hourly_atr * 0.5):.2f}\n"
         message += f"Take Profit (1%): ${last_price * 1.01:.2f}\n"
-        message += f"Stop Loss (-0.5%): ${last_price * 0.995:.2f}\n"
+        message += f"Stop Loss (-0.5%): ${last_price * 0.995:.2f}\n\n"
     else: 
         message += f"Entry/Pullback: ${last_price + (hourly_atr * 0.5):.2f}\n"
         message += f"Take Profit (1%): ${last_price * 0.99:.2f}\n"
-        message += f"Stop Loss (+0.5%): ${last_price * 1.005:.2f}\n"
+        message += f"Stop Loss (+0.5%): ${last_price * 1.005:.2f}\n\n"
+        
+    message += f"⚙️ *EXECUTION LOG*\n{trade_status}"
 
 print(message)
 
